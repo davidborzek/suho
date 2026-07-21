@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../../schemas/network-policies.v1alpha1.json
+# Global policies (≈ CiliumClusterwideNetworkPolicy).
+#
+# Each applies to every container whose labels match `endpointSelector`
+# (an empty selector matches all containers). They are ADDITIVE with a
+# container's inline `suho.networkpolicy.*` labels: a container's effective
+# egress allowance is the union of every policy that applies to it.
+
+# Frontend containers additionally get DNS egress, so name resolution to
+# external resolvers keeps working under the default-deny their egress policy
+# imposes. (Docker's embedded resolver at 127.0.0.11 is not forwarded and is
+# never filtered, so intra-compose name resolution works regardless.)
+- name: frontend-dns
+  endpointSelector:
+    tier: frontend
+  policyTypes: [Egress]
+  egress:
+    - to: [{cidr: 0.0.0.0/0}]
+      ports: ["53/udp", "53/tcp"]

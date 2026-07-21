@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "suho network policies (v1alpha1)",
+  "type": "array",
+  "$comment": "Generated from suho's Rust types; regenerate with `suho schema`.",
+  "items": {
+    "$ref": "#/$defs/GlobalPolicy"
+  },
+  "$defs": {
+    "EgressRule": {
+      "description": "An egress rule: allow traffic *to* these peers on these ports.",
+      "type": "object",
+      "properties": {
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Port"
+          }
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Peer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "GlobalPolicy": {
+      "description": "A global, label-selected policy (≈ `CiliumClusterwideNetworkPolicy`),\ndefined in `policies/suho.yaml`.",
+      "type": "object",
+      "properties": {
+        "egress": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EgressRule"
+          }
+        },
+        "endpointSelector": {
+          "description": "Containers this policy applies to. Omitted on a `networkpolicy.<name>`\nlabel means the container carrying it; set means every container whose\nlabels match (so one label can define policy for a whole group).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "ingress": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IngressRule"
+          }
+        },
+        "name": {
+          "type": "string",
+          "default": ""
+        },
+        "policyTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyType"
+          }
+        }
+      }
+    },
+    "IngressRule": {
+      "description": "An ingress rule: allow traffic *from* these peers on these ports.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Peer"
+          }
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Port"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Peer": {
+      "description": "A policy peer. `cidr` (+ `except`) is a standalone address block; `container`,\n`network` and `selector` are container-identity filters that combine (AND) —\nset several to match only containers satisfying all of them. Maps to\nKubernetes peers: `selector` ≈ `podSelector`, `network` ≈ `namespaceSelector`,\n`cidr`/`except` ≈ `ipBlock`; `container` (by Docker name) is a suho extension.",
+      "type": "object",
+      "properties": {
+        "cidr": {
+          "description": "A CIDR block, e.g. `0.0.0.0/0`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "container": {
+          "description": "A single container by its Docker name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "except": {
+          "description": "CIDRs to exclude from `cidr` (≈ `ipBlock.except`); ignored without `cidr`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "network": {
+          "description": "A Docker network name (every container attached to it).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selector": {
+          "description": "Arbitrary label match (e.g. `com.docker.compose.service`, or your own\ngrouping label). ≈ `podSelector.matchLabels`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyType": {
+      "description": "Which direction a policy governs. Presence makes that direction default-deny\n(Kubernetes semantics).",
+      "type": "string",
+      "enum": [
+        "Ingress",
+        "Egress"
+      ]
+    },
+    "Port": {
+      "description": "L4 port as `<number>/<proto>`, a range `<start>-<end>/<proto>`, or `*`/omitted for all ports (proto defaults to tcp).",
+      "type": "string",
+      "examples": [
+        "443/tcp",
+        "53/udp",
+        "80",
+        "32000-32768/tcp"
+      ]
+    }
+  }
+}

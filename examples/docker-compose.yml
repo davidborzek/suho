@@ -1,0 +1,68 @@
+# Example: run suho plus a couple of labelled workloads.
+#
+#   docker compose up --build
+#
+# suho runs in the host network namespace so its nftables rules sit in the
+# host's `forward` hook — where Docker bridge traffic is filtered — with
+# CAP_NET_ADMIN, reading the Docker API read-only and the global policies below.
+# The workloads run on a normal bridge network so their egress traverses that
+# hook and suho can enforce it.
+name: suho-example
+
+services:
+  suho:
+    build: ..
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    read_only: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./policies:/etc/suho/policies:ro
+    environment:
+      SUHO_POLICIES_PATH: /etc/suho/policies
+      RUST_LOG: info
+    restart: unless-stopped
+
+  web:
+    image: busybox
+    command: sleep infinity
+    networks: [demo]
+    labels:
+      tier: frontend            # matched by the frontend-dns global (policies/suho.yaml)
+      db-client: "true"         # opt in to db's `db-clients` global policy below
+      # Inline egress: web is default-deny outbound; here it may reach HTTPS.
+      # (db access comes from the db-clients global, DNS from frontend-dns.)
+      suho.networkpolicy.egress: |
+        policyTypes: [Egress]
+        egress:
+          - to: [{cidr: 0.0.0.0/0}]
+            ports: ["443/tcp"]
+
+  db:
+    image: busybox
+    command: sh -c "while :; do echo ok | nc -l -p 5432; done"
+    networks: [demo]
+    labels:
+      # Inline ingress: db is default-deny inbound; accept db-clients on 5432.
+      # The `selector` peer is the ingress analog of the global's endpointSelector
+      # below — both key off the same `db-client` opt-in label.
+      suho.networkpolicy.db-server: |
+        policyTypes: [Ingress]
+        ingress:
+          - from: [{selector: {db-client: "true"}}]
+            ports: ["5432/tcp"]
+      # Co-located policy with an endpointSelector (like a per-service
+      # CiliumClusterwideNetworkPolicy): any container labelled `db-client: "true"`
+      # may egress to db on 5432 — defined here on db, applied to the clients.
+      suho.networkpolicy.db-clients: |
+        endpointSelector: {db-client: "true"}
+        policyTypes: [Egress]
+        egress:
+          # Target the db Compose service. Add com.docker.compose.project to
+          # scope to one project, or any label to narrow further.
+          - to: [{selector: {com.docker.compose.service: db}}]
+            ports: ["5432/tcp"]
+
+networks:
+  demo:

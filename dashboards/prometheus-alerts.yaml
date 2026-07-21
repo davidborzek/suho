@@ -1,0 +1,39 @@
+# Prometheus alerting rules for suho. Load via rule_files in prometheus.yml.
+groups:
+  - name: suho
+    rules:
+      - alert: SuhoNotReady
+        expr: suho_ready == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "suho has not completed a successful reconcile"
+          description: "suho_ready has been 0 for 5m on {{ $labels.instance }} — no ruleset is in force."
+
+      - alert: SuhoReconcileStale
+        expr: time() - suho_last_reconcile_success_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "suho enforcement is stale"
+          description: "No successful reconcile for >5m on {{ $labels.instance }}; the ruleset may not reflect current containers."
+
+      - alert: SuhoReconcileErrors
+        expr: rate(suho_reconciles_total{result="error"}[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "suho reconciles are failing"
+          description: "suho has failing reconciles on {{ $labels.instance }} (check the daemon logs)."
+
+      - alert: SuhoWatchFlapping
+        expr: rate(suho_watch_restarts_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "suho Docker event watcher is flapping"
+          description: "The Docker event stream keeps being re-established on {{ $labels.instance }} — usually Docker API instability, not suho."
