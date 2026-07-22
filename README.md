@@ -22,6 +22,12 @@ without Kubernetes.
 > Prometheus metrics and health endpoints are built in; `--dry-run` logs the
 > resolved ruleset instead of programming nftables.
 
+> [!WARNING]
+> **Early-stage software.** suho is fresh and pre-1.0 — expect rough edges, and
+> review the resolved ruleset (`--dry-run` or `suho status`) before you rely on
+> it. The policy API is **`v1alpha1`** and may still change, though large shifts
+> are unlikely since it mirrors the established Kubernetes `NetworkPolicy` model.
+
 ## How it works
 
 Container IPs churn, so policy references **identity** — a container's labels, a
