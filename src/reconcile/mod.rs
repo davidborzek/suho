@@ -13,16 +13,19 @@ mod egress;
 mod ingress;
 mod resolve;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 use tracing::warn;
 
 use crate::{
     api::v1alpha1::{self as policy, GlobalPolicy, NetworkPolicy},
-    config::Config,
+    config::{Config, FlowLogMode},
     docker::{Source, Target},
     enforce::{Enforcer, Ruleset},
+    flowlog::IpIndex,
 };
 
 use resolve::{Index, target_ips};
@@ -73,16 +76,24 @@ pub struct Reconciler<E: Enforcer> {
     enforcer: E,
     config: Config,
     globals: Vec<GlobalPolicy>,
+    ip_index: Arc<RwLock<IpIndex>>,
 }
 
 impl<E: Enforcer> Reconciler<E> {
     /// Create a reconciler.
-    pub fn new(source: Source, enforcer: E, config: Config, globals: Vec<GlobalPolicy>) -> Self {
+    pub fn new(
+        source: Source,
+        enforcer: E,
+        config: Config,
+        globals: Vec<GlobalPolicy>,
+        ip_index: Arc<RwLock<IpIndex>>,
+    ) -> Self {
         Self {
             source,
             enforcer,
             config,
             globals,
+            ip_index,
         }
     }
 
@@ -93,7 +104,13 @@ impl<E: Enforcer> Reconciler<E> {
     /// Fails if listing containers or applying the ruleset fails.
     pub async fn run_once(&mut self) -> Result<(usize, usize, usize)> {
         let targets = self.source.list_targets().await?;
-        let ruleset = compile(&targets, &self.config.label_prefix, &self.globals);
+        let ruleset = compile(
+            &targets,
+            &self.config.label_prefix,
+            &self.globals,
+            &self.config.flowlog,
+        );
+        *self.ip_index.write().expect("ip index poisoned") = build_ip_index(&targets);
         let counts = (
             ruleset.egress.len(),
             ruleset.ingress.len(),
@@ -121,13 +138,31 @@ pub async fn resolve(
     globals: &[GlobalPolicy],
 ) -> Result<(Vec<Target>, Ruleset)> {
     let targets = source.list_targets().await?;
-    let ruleset = compile(&targets, &config.label_prefix, globals);
+    let ruleset = compile(&targets, &config.label_prefix, globals, &config.flowlog);
     Ok((targets, ruleset))
+}
+
+/// Build an IP → container name index from the current targets.
+pub fn build_ip_index(targets: &[Target]) -> IpIndex {
+    let mut index = HashMap::new();
+    for target in targets {
+        for addrs in target.networks.values() {
+            for &addr in addrs {
+                index.insert(addr, target.name.clone());
+            }
+        }
+    }
+    index
 }
 
 /// Compile the current containers + policies into the desired [`Ruleset`]:
 /// per container, the egress rules and the ingress rules it enforces.
-fn compile(targets: &[Target], label_prefix: &str, globals: &[GlobalPolicy]) -> Ruleset {
+fn compile(
+    targets: &[Target],
+    label_prefix: &str,
+    globals: &[GlobalPolicy],
+    flowlog: &crate::config::FlowLog,
+) -> Ruleset {
     let index = Index::build(targets);
 
     // Parse every container's policy labels once, keeping the carrier so a
@@ -162,12 +197,22 @@ fn compile(targets: &[Target], label_prefix: &str, globals: &[GlobalPolicy]) -> 
         }
         let policies = policies_for(target, &inline, globals);
 
+        let flowlog_enabled = flowlog.mode != FlowLogMode::Off;
+
         let egress: Vec<&(String, NetworkPolicy)> = policies
             .iter()
             .filter(|(_, np)| egress::enforces(np))
             .collect();
         if !egress.is_empty() {
-            egress::emit(target, &ips, &egress, &index, targets, &mut rs);
+            egress::emit(
+                target,
+                &ips,
+                &egress,
+                &index,
+                targets,
+                &mut rs,
+                flowlog_enabled,
+            );
         }
 
         let ingress: Vec<&(String, NetworkPolicy)> = policies
@@ -175,7 +220,15 @@ fn compile(targets: &[Target], label_prefix: &str, globals: &[GlobalPolicy]) -> 
             .filter(|(_, np)| ingress::enforces(np))
             .collect();
         if !ingress.is_empty() {
-            ingress::emit(target, &ips, &ingress, &index, targets, &mut rs);
+            ingress::emit(
+                target,
+                &ips,
+                &ingress,
+                &index,
+                targets,
+                &mut rs,
+                flowlog_enabled,
+            );
         }
     }
     rs
@@ -218,8 +271,10 @@ mod tests {
 
     use super::compile;
     use crate::api::v1alpha1 as policy;
+    use crate::config::{FlowLog, FlowLogMode};
     use crate::docker::Target;
     use crate::enforce::{Match, Ruleset, Verdict};
+    use crate::flowlog::parse_prefix;
 
     fn tgt(name: &str, ip: &str, labels: &[(&str, &str)]) -> Target {
         Target {
@@ -260,7 +315,7 @@ mod tests {
             )],
         );
         let db = tgt("db", "10.0.0.5", &[]);
-        let rs = compile(&[app, db], "suho", &[]);
+        let rs = compile(&[app, db], "suho", &[], &crate::config::FlowLog::default());
 
         let allow = rs
             .egress
@@ -289,7 +344,7 @@ mod tests {
                 "policyTypes: [Egress]\negress:\n  - to: [{cidr: 0.0.0.0/0}]\n    ports: [\"443/tcp\"]\n",
             )],
         );
-        let rs = compile(&[app], "suho", &[]);
+        let rs = compile(&[app], "suho", &[], &crate::config::FlowLog::default());
         let allow = rs
             .egress
             .iter()
@@ -320,7 +375,7 @@ mod tests {
                 ),
             ],
         );
-        let rs = compile(&[app], "suho", &[]);
+        let rs = compile(&[app], "suho", &[], &crate::config::FlowLog::default());
         assert_eq!(
             rs.egress
                 .iter()
@@ -341,7 +396,7 @@ mod tests {
                 "egress:\n  - to: [{cidr: 0.0.0.0/0}]\n",
             )],
         );
-        let rs = compile(&[app], "suho", &[]);
+        let rs = compile(&[app], "suho", &[], &crate::config::FlowLog::default());
         assert_eq!(egress_drops(&rs), 1);
     }
 
@@ -357,7 +412,7 @@ mod tests {
             )],
         );
         let web = tgt("web", "10.0.0.2", &[]);
-        let rs = compile(&[db, web], "suho", &[]);
+        let rs = compile(&[db, web], "suho", &[], &crate::config::FlowLog::default());
 
         assert!(rs.egress.is_empty());
         let allow = rs
@@ -392,7 +447,7 @@ mod tests {
                 "policyTypes: [Ingress]\negress:\n  - to: [{cidr: 0.0.0.0/0}]\n",
             )],
         );
-        let rs = compile(&[app], "suho", &[]);
+        let rs = compile(&[app], "suho", &[], &crate::config::FlowLog::default());
         assert!(rs.egress.is_empty());
         assert!(!rs.ingress.is_empty());
     }
@@ -408,7 +463,7 @@ mod tests {
             )],
         );
         app.networks.clear();
-        let rs = compile(&[app], "suho", &[]);
+        let rs = compile(&[app], "suho", &[], &crate::config::FlowLog::default());
         assert!(rs.egress.is_empty() && rs.ingress.is_empty());
     }
 
@@ -425,7 +480,7 @@ mod tests {
             )],
         );
         let app = tgt("app", "10.0.0.2", &[("egress-xxx", "true")]);
-        let rs = compile(&[xxx, app], "suho", &[]);
+        let rs = compile(&[xxx, app], "suho", &[], &crate::config::FlowLog::default());
 
         let allow = rs
             .egress
@@ -442,5 +497,86 @@ mod tests {
         );
         assert_eq!(allow.ports, vec![port("80/tcp")]);
         assert_eq!(egress_drops(&rs), 1); // only app carries the opt-in label
+    }
+
+    #[test]
+    fn flowlog_disabled_leaves_prefix_empty() {
+        let app = tgt(
+            "app",
+            "10.0.0.2",
+            &[(
+                "suho.networkpolicy.default",
+                "policyTypes: [Egress]\negress: []\n",
+            )],
+        );
+        let rs = compile(&[app], "suho", &[], &FlowLog::default());
+        let deny = rs
+            .egress
+            .iter()
+            .find(|r| r.verdict == Verdict::Drop)
+            .unwrap();
+        assert!(deny.log_prefix.is_none());
+    }
+
+    #[test]
+    fn flowlog_enabled_tags_egress_default_deny() {
+        let app = tgt(
+            "app",
+            "10.0.0.2",
+            &[(
+                "suho.networkpolicy.default",
+                "policyTypes: [Egress]\negress: []\n",
+            )],
+        );
+        let rs = compile(
+            &[app],
+            "suho",
+            &[],
+            &FlowLog {
+                mode: FlowLogMode::Drops,
+                ..FlowLog::default()
+            },
+        );
+        let deny = rs
+            .egress
+            .iter()
+            .find(|r| r.verdict == Verdict::Drop)
+            .unwrap();
+        let prefix = deny.log_prefix.clone().expect("log prefix");
+        let (container, dir, verdict) = parse_prefix(&prefix);
+        assert_eq!(container, "app");
+        assert_eq!(dir, "egress");
+        assert_eq!(verdict, "drop");
+    }
+
+    #[test]
+    fn flowlog_enabled_tags_ingress_default_deny() {
+        let app = tgt(
+            "app",
+            "10.0.0.2",
+            &[(
+                "suho.networkpolicy.default",
+                "policyTypes: [Ingress]\ningress: []\n",
+            )],
+        );
+        let rs = compile(
+            &[app],
+            "suho",
+            &[],
+            &FlowLog {
+                mode: FlowLogMode::Drops,
+                ..FlowLog::default()
+            },
+        );
+        let deny = rs
+            .ingress
+            .iter()
+            .find(|r| r.verdict == Verdict::Drop)
+            .unwrap();
+        let prefix = deny.log_prefix.clone().expect("log prefix");
+        let (container, dir, verdict) = parse_prefix(&prefix);
+        assert_eq!(container, "app");
+        assert_eq!(dir, "ingress");
+        assert_eq!(verdict, "drop");
     }
 }

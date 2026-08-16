@@ -10,11 +10,12 @@ mod api;
 mod config;
 mod docker;
 mod enforce;
+mod flowlog;
 mod obs;
 mod reconcile;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -25,9 +26,10 @@ use tracing::{error, info, warn};
 
 use crate::{
     api::v1alpha1 as policy,
-    config::Config,
+    config::{Config, FlowLogMode},
     docker::Source,
     enforce::{Enforcer, LoggingEnforcer, NftEnforcer},
+    flowlog::{IpIndex, Receiver},
     obs::{Metrics, Trigger},
     reconcile::Reconciler,
 };
@@ -101,8 +103,24 @@ async fn run(dry_run: bool) -> Result<()> {
     }
 
     let source = Source::connect()?;
-    let enforcer = select_enforcer(dry_run);
-    let mut reconciler = Reconciler::new(source, enforcer, config.clone(), globals);
+
+    let ip_index = Arc::new(RwLock::new(IpIndex::new()));
+    let flowlog_group = if !dry_run && config.flowlog.mode != FlowLogMode::Off {
+        let receiver = Receiver::new(
+            config.flowlog.group,
+            config.flowlog.sink,
+            config.flowlog.rate,
+            Arc::clone(&ip_index),
+            Arc::clone(&metrics),
+        );
+        tokio::task::spawn_blocking(move || receiver.run());
+        Some(config.flowlog.group)
+    } else {
+        None
+    };
+
+    let enforcer = select_enforcer(dry_run, flowlog_group);
+    let mut reconciler = Reconciler::new(source, enforcer, config.clone(), globals, ip_index);
     let mut events = reconciler.watch({
         let metrics = Arc::clone(&metrics);
         move || metrics.watch_restarted()
@@ -216,14 +234,14 @@ async fn status() -> Result<()> {
 /// Pick the enforcement backend. `--dry-run` resolves policy and logs the
 /// ruleset without touching the host; otherwise suho programs nftables (needs
 /// root / `CAP_NET_ADMIN`).
-fn select_enforcer(dry_run: bool) -> Box<dyn Enforcer> {
+fn select_enforcer(dry_run: bool, flowlog_group: Option<u16>) -> Box<dyn Enforcer> {
     if dry_run {
         info!("dry-run: resolving policy and logging the ruleset, applying nothing");
         Box::new(LoggingEnforcer)
     } else {
         info!("enforcing via nftables (table inet suho)");
         warn_if_bridge_netfilter_disabled();
-        Box::new(NftEnforcer)
+        Box::new(NftEnforcer::new(flowlog_group))
     }
 }
 

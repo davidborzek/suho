@@ -53,6 +53,13 @@ struct BuildLabels {
     version: &'static str,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct FlowEventLabels {
+    verdict: String,
+    dir: String,
+    container: String,
+}
+
 /// Reconcile metrics, updated by the reconcile loop and exposed at `/metrics`.
 pub struct Metrics {
     registry: Registry,
@@ -63,6 +70,8 @@ pub struct Metrics {
     sets: Gauge,
     ready: Gauge,
     watch_restarts: Counter,
+    flow_events: Family<FlowEventLabels, Counter>,
+    flow_events_dropped: Counter,
 }
 
 impl Default for Metrics {
@@ -79,6 +88,8 @@ impl Default for Metrics {
         let sets = Gauge::default();
         let ready = Gauge::default();
         let watch_restarts = Counter::default();
+        let flow_events = Family::<FlowEventLabels, Counter>::default();
+        let flow_events_dropped = Counter::default();
 
         // Build info: a constant `1` carrying the version as a label.
         let build = Family::<BuildLabels, Gauge>::default();
@@ -125,6 +136,16 @@ impl Default for Metrics {
             "Docker event watcher re-establishments",
             watch_restarts.clone(),
         );
+        registry.register(
+            "suho_flow_events",
+            "Flow events emitted",
+            flow_events.clone(),
+        );
+        registry.register(
+            "suho_flow_events_dropped",
+            "Flow events dropped by rate limiting",
+            flow_events_dropped.clone(),
+        );
 
         Self {
             registry,
@@ -135,6 +156,8 @@ impl Default for Metrics {
             sets,
             ready,
             watch_restarts,
+            flow_events,
+            flow_events_dropped,
         }
     }
 }
@@ -176,6 +199,25 @@ impl Metrics {
     /// Count a re-established Docker event watcher (self-heal).
     pub fn watch_restarted(&self) {
         self.watch_restarts.inc();
+    }
+
+    /// Count a flow event. Called for every parsed flow BEFORE the log-sink
+    /// rate limiter, so this counter is the complete flow count even when the
+    /// sink drops events (see `flow_ratelimited`). Labels are bounded: verdict,
+    /// direction, and the governed container name.
+    pub fn flow_event(&self, verdict: String, dir: String, container: String) {
+        self.flow_events
+            .get_or_create(&FlowEventLabels {
+                verdict,
+                dir,
+                container,
+            })
+            .inc();
+    }
+
+    /// Count a flow event dropped by rate limiting.
+    pub fn flow_ratelimited(&self) {
+        self.flow_events_dropped.inc();
     }
 
     /// Whether at least one reconcile has succeeded.
@@ -280,5 +322,16 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("suho_build_info{version="), "{out}");
+
+        m.flow_event("drop".to_owned(), "egress".to_owned(), "web".to_owned());
+        m.flow_ratelimited();
+        let out = m.render();
+        assert!(
+            out.contains(
+                r#"suho_flow_events_total{verdict="drop",dir="egress",container="web"} 1"#
+            ),
+            "{out}"
+        );
+        assert!(out.contains("suho_flow_events_dropped_total 1"), "{out}");
     }
 }

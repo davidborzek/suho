@@ -68,6 +68,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,6 +339,15 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "etherparse"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8d8a704b617484e9d867a0423cd45f7577f008c4068e2e33378f8d3860a6d73"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -1221,6 +1236,7 @@ dependencies = [
  "axum",
  "bollard",
  "clap",
+ "etherparse",
  "futures-util",
  "ipnetwork",
  "nix",
