@@ -10,7 +10,6 @@ follow [Semantic Versioning](https://semver.org/).
 ### Bug Fixes
 
 * **nft:** force a large netlink receive buffer to avoid ENOBUFS ([#2](https://github.com/davidborzek/suho/issues/2)) ([41550c6](https://github.com/davidborzek/suho/commit/41550c60fcf5857fefbd60b23a3aa80351f2cc06))
-
 ## 0.1.0 (2026-07-22)
 
 Initial release.

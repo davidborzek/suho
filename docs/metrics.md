@@ -27,6 +27,8 @@ namespace, so `0.0.0.0` exposes it on every host IP.
 | `suho_sets` | gauge | — | Named nftables sets in the last applied ruleset. |
 | `suho_ready` | gauge | — | `1` once at least one reconcile has succeeded, else `0`. |
 | `suho_watch_restarts_total` | counter | — | Times the Docker event watcher was re-established (self-heal). |
+| `suho_flow_events_total` | counter | `verdict`, `dir`, `container` | Flow events observed by the NFLOG receiver, counted **before** the log-sink rate limiter — so this is the complete flow count (verdict × direction × governed container) even when the sink is throttled. |
+| `suho_flow_events_dropped_total` | counter | — | Flow events that did **not** reach the log sink because of the per-second rate limit (`SUHO_FLOWLOG_RATE`). |
 
 A failed reconcile increments `suho_reconciles_total{result="error"}` but leaves
 `suho_rules`/`suho_sets`/`suho_last_reconcile_success_timestamp_seconds` at their

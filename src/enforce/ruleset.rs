@@ -36,6 +36,8 @@ pub struct Rule {
     pub ports: Vec<Port>,
     /// Terminal verdict.
     pub verdict: Verdict,
+    /// Optional NFLOG prefix for denied flows (Phase-1 flow log).
+    pub log_prefix: Option<String>,
 }
 
 /// An address matcher for `ip saddr` / `ip daddr`.
@@ -141,6 +143,9 @@ impl fmt::Display for Rule {
             let ports: Vec<String> = self.ports.iter().map(ToString::to_string).collect();
             write!(f, " ports {{{}}}", ports.join(", "))?;
         }
+        if self.log_prefix.is_some() {
+            write!(f, " log")?;
+        }
         write!(f, " {}", self.verdict)
     }
 }
@@ -182,6 +187,7 @@ mod tests {
             daddr: Match::Any,
             ports: vec![],
             verdict: Verdict::Drop,
+            log_prefix: None,
         };
         let rendered = rule.to_string();
         assert!(rendered.contains("ip6 saddr"), "{rendered}");
@@ -198,6 +204,7 @@ mod tests {
             daddr: Match::Any,
             ports: vec![],
             verdict: Verdict::Return,
+            log_prefix: None,
         };
         let rendered = rule.to_string();
         assert!(

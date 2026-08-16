@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 use rustables::expr::{
     Bitwise, Cmp, CmpOp, ConnTrackState, Conntrack, ConntrackKey, HighLevelPayload,
-    IPv4HeaderField, IPv6HeaderField, Immediate, Lookup, Meta, MetaType, NetworkHeaderField,
+    IPv4HeaderField, IPv6HeaderField, Immediate, Log, Lookup, Meta, MetaType, NetworkHeaderField,
     TCPHeaderField, TransportHeaderField, UDPHeaderField, VerdictKind,
 };
 use rustables::set::SetBuilder;
@@ -97,7 +97,24 @@ const PRIORITY: i32 = -5;
 
 /// Programs the desired ruleset into `inet suho` via netlink. Requires
 /// `CAP_NET_ADMIN` (root); [`apply`](Self::apply) fails otherwise.
-pub struct NftEnforcer;
+pub struct NftEnforcer {
+    /// NFLOG group for denied-flow logging; `None` disables flow-log rules.
+    flowlog_group: Option<u16>,
+}
+
+impl NftEnforcer {
+    /// Create an enforcer with an optional NFLOG group for flow logging.
+    #[must_use]
+    pub const fn new(flowlog_group: Option<u16>) -> Self {
+        Self { flowlog_group }
+    }
+}
+
+impl Default for NftEnforcer {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
 
 impl Enforcer for NftEnforcer {
     fn apply(&mut self, ruleset: &Ruleset) -> Result<()> {
@@ -179,12 +196,12 @@ impl Enforcer for NftEnforcer {
         batch.add(&forward, MsgType::Add);
 
         for rule in &ruleset.egress {
-            for nft_rule in expand(rule, &egress_chain, &sets)? {
+            for nft_rule in expand(rule, &egress_chain, &sets, self.flowlog_group)? {
                 batch.add(&nft_rule, MsgType::Add);
             }
         }
         for rule in &ruleset.ingress {
-            for nft_rule in expand(rule, &ingress_chain, &sets)? {
+            for nft_rule in expand(rule, &ingress_chain, &sets, self.flowlog_group)? {
                 batch.add(&nft_rule, MsgType::Add);
             }
         }
@@ -248,6 +265,7 @@ fn expand(
     rule: &Rule,
     chain: &Chain,
     sets: &BTreeMap<(String, Family), Set>,
+    flowlog_group: Option<u16>,
 ) -> Result<Vec<NftRule>> {
     let ports: Vec<Option<&Port>> = if rule.ports.is_empty() {
         vec![None]
@@ -267,6 +285,15 @@ fn expand(
                     r = apply_side(r, dst, sets, family, false)?;
                     if let Some(port) = port {
                         r = apply_port(r, port);
+                    }
+                    if rule.verdict == Verdict::Drop && rule.log_prefix.is_some() {
+                        if let Some(group) = flowlog_group {
+                            r = add_ct_state_new(r)?;
+                            r.add_expr(
+                                Log::new(Some(group), rule.log_prefix.clone())
+                                    .context("log expression")?,
+                            );
+                        }
                     }
                     let verdict = match rule.verdict {
                         Verdict::Return => VerdictKind::Return,
@@ -386,6 +413,16 @@ fn network_neq(mut rule: NftRule, cidr: &Cidr, source: bool) -> Result<NftRule> 
     Ok(rule)
 }
 
+/// Match `ct state new` so each dropped flow is logged once (the first packet),
+/// not on every retransmit.
+fn add_ct_state_new(mut rule: NftRule) -> Result<NftRule> {
+    rule.add_expr(Conntrack::new(ConntrackKey::State));
+    let mask = ConnTrackState::NEW.bits();
+    rule.add_expr(Bitwise::new(mask.to_ne_bytes(), 0u32.to_ne_bytes()).context("ct state mask")?);
+    rule.add_expr(Cmp::new(CmpOp::Neq, 0u32.to_ne_bytes()));
+    Ok(rule)
+}
+
 fn apply_port(rule: NftRule, port: &Port) -> NftRule {
     let proto = match port.protocol {
         PolicyProto::Tcp => Protocol::TCP,
@@ -499,8 +536,9 @@ mod tests {
             daddr: Match::Set("g".to_owned()),
             ports: vec![port("443/tcp"), port("80/tcp")],
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert_eq!(expand(&rule, &chain, &sets).unwrap().len(), 2);
+        assert_eq!(expand(&rule, &chain, &sets, None).unwrap().len(), 2);
     }
 
     #[test]
@@ -513,8 +551,12 @@ mod tests {
             daddr: Match::Any,
             ports: Vec::new(),
             verdict: Verdict::Drop,
+            log_prefix: None,
         };
-        assert_eq!(expand(&rule, &chain, &BTreeMap::new()).unwrap().len(), 2);
+        assert_eq!(
+            expand(&rule, &chain, &BTreeMap::new(), None).unwrap().len(),
+            2
+        );
     }
 
     #[test]
@@ -527,8 +569,12 @@ mod tests {
             daddr: Match::Any,
             ports: vec![port("32000-32768/tcp")],
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert_eq!(expand(&rule, &chain, &BTreeMap::new()).unwrap().len(), 1);
+        assert_eq!(
+            expand(&rule, &chain, &BTreeMap::new(), None).unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -544,8 +590,12 @@ mod tests {
             },
             ports: Vec::new(),
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert_eq!(expand(&rule, &chain, &BTreeMap::new()).unwrap().len(), 1);
+        assert_eq!(
+            expand(&rule, &chain, &BTreeMap::new(), None).unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -558,8 +608,13 @@ mod tests {
             daddr: Match::Set("absent".to_owned()),
             ports: Vec::new(),
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert!(expand(&rule, &chain, &BTreeMap::new()).unwrap().is_empty());
+        assert!(
+            expand(&rule, &chain, &BTreeMap::new(), None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -587,8 +642,13 @@ mod tests {
             },
             ports: Vec::new(),
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert!(expand(&rule, &chain, &BTreeMap::new()).unwrap().is_empty());
+        assert!(
+            expand(&rule, &chain, &BTreeMap::new(), None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -603,8 +663,46 @@ mod tests {
             },
             ports: vec![port("443/tcp")],
             verdict: Verdict::Return,
+            log_prefix: None,
         };
-        assert_eq!(expand(&rule, &chain, &BTreeMap::new()).unwrap().len(), 1);
+        assert_eq!(
+            expand(&rule, &chain, &BTreeMap::new(), None).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn expand_drop_with_log_prefix_and_group_succeeds() {
+        // Logging adds a `ct state new` match and a `log` expression before the
+        // drop verdict; this must serialize without error.
+        let (_table, chain) = table_chain();
+        let rule = Rule {
+            comment: "deny".to_owned(),
+            saddr: Match::Addrs(addrs(&["10.0.0.2"])),
+            daddr: Match::Any,
+            ports: Vec::new(),
+            verdict: Verdict::Drop,
+            log_prefix: Some("suho c=web;d=egress;v=drop".to_owned()),
+        };
+        let expanded = expand(&rule, &chain, &BTreeMap::new(), Some(100)).unwrap();
+        assert_eq!(expanded.len(), 1);
+    }
+
+    #[test]
+    fn expand_drop_with_log_prefix_but_no_group_succeeds_without_log() {
+        // When no NFLOG group is configured the drop rule is built without the
+        // logging expressions; it must still serialize cleanly.
+        let (_table, chain) = table_chain();
+        let rule = Rule {
+            comment: "deny".to_owned(),
+            saddr: Match::Addrs(addrs(&["10.0.0.2"])),
+            daddr: Match::Any,
+            ports: Vec::new(),
+            verdict: Verdict::Drop,
+            log_prefix: Some("suho c=web;d=egress;v=drop".to_owned()),
+        };
+        let expanded = expand(&rule, &chain, &BTreeMap::new(), None).unwrap();
+        assert_eq!(expanded.len(), 1);
     }
 
     /// Rootless, sandboxed end-to-end: re-exec this test inside an unprivileged
@@ -632,6 +730,7 @@ mod tests {
                         },
                         ports: vec![port("443/tcp"), port("32000-32768/tcp")],
                         verdict: Verdict::Return,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "web/db".to_owned(),
@@ -639,6 +738,7 @@ mod tests {
                         daddr: Match::Set("net_demo".to_owned()),
                         ports: vec![port("5432/tcp")],
                         verdict: Verdict::Return,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "web egress default-deny".to_owned(),
@@ -646,6 +746,7 @@ mod tests {
                         daddr: Match::Any,
                         ports: Vec::new(),
                         verdict: Verdict::Drop,
+                        log_prefix: None,
                     },
                 ],
                 ingress: vec![
@@ -658,6 +759,7 @@ mod tests {
                         daddr: Match::Addrs(addrs(&["fd00::5"])),
                         ports: vec![port("5432/tcp")],
                         verdict: Verdict::Return,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "db ingress default-deny".to_owned(),
@@ -665,11 +767,12 @@ mod tests {
                         daddr: Match::Addrs(addrs(&["10.0.0.5", "fd00::5"])),
                         ports: Vec::new(),
                         verdict: Verdict::Drop,
+                        log_prefix: None,
                     },
                 ],
             };
 
-            let mut enforcer = super::NftEnforcer;
+            let mut enforcer = super::NftEnforcer::new(None);
             enforcer
                 .apply(&ruleset)
                 .expect("kernel accepted the ruleset");
@@ -783,6 +886,7 @@ mod tests {
                         daddr: Match::Addrs(b.clone()),
                         ports: Vec::new(),
                         verdict: Verdict::Return,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "a deny".to_owned(),
@@ -790,6 +894,7 @@ mod tests {
                         daddr: Match::Any,
                         ports: Vec::new(),
                         verdict: Verdict::Drop,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "b deny".to_owned(),
@@ -797,6 +902,7 @@ mod tests {
                         daddr: Match::Any,
                         ports: Vec::new(),
                         verdict: Verdict::Drop,
+                        log_prefix: None,
                     },
                 ],
                 ingress: vec![
@@ -806,6 +912,7 @@ mod tests {
                         daddr: Match::Addrs(b.clone()),
                         ports: Vec::new(),
                         verdict: Verdict::Return,
+                        log_prefix: None,
                     },
                     Rule {
                         comment: "b deny in".to_owned(),
@@ -813,10 +920,11 @@ mod tests {
                         daddr: Match::Addrs(b),
                         ports: Vec::new(),
                         verdict: Verdict::Drop,
+                        log_prefix: None,
                     },
                 ],
             };
-            super::NftEnforcer
+            super::NftEnforcer::new(None)
                 .apply(&ruleset)
                 .expect("apply suho ruleset");
 

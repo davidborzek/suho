@@ -13,6 +13,10 @@ use crate::enforce::{Match, Rule, Ruleset, Verdict};
 
 use super::resolve::{Index, resolve_peer};
 
+/// Max NFLOG prefix length the kernel accepts (127 bytes) minus a safety byte
+/// for the trailing NUL rustables appends.
+const MAX_PREFIX_LEN: usize = 120;
+
 /// Egress is enforced when the policy lists `Egress`, or — mirroring
 /// Kubernetes — when `policyTypes` is omitted but egress rules are present.
 pub(super) fn enforces(np: &NetworkPolicy) -> bool {
@@ -30,6 +34,7 @@ pub(super) fn emit(
     index: &Index,
     targets: &[Target],
     rs: &mut Ruleset,
+    flowlog_enabled: bool,
 ) {
     let src = Match::Addrs(ips.clone());
     for (name, np) in policies.iter().copied() {
@@ -49,6 +54,7 @@ pub(super) fn emit(
                     daddr,
                     ports: rule.ports.clone(),
                     verdict: Verdict::Return,
+                    log_prefix: None,
                 });
             }
         }
@@ -59,7 +65,22 @@ pub(super) fn emit(
         daddr: Match::Any,
         ports: Vec::new(),
         verdict: Verdict::Drop,
+        log_prefix: flowlog_prefix(target, flowlog_enabled, "egress"),
     });
+}
+
+pub(super) fn flowlog_prefix(target: &Target, enabled: bool, dir: &str) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    let suffix = format!(";d={dir};v=drop");
+    let prefix = format!("suho c={}{suffix}", target.name);
+    if prefix.len() <= MAX_PREFIX_LEN {
+        return Some(prefix);
+    }
+    let budget = MAX_PREFIX_LEN.saturating_sub(suffix.len() + "suho c=".len());
+    let truncated: String = target.name.chars().take(budget).collect();
+    Some(format!("suho c={truncated}{suffix}"))
 }
 
 #[cfg(test)]

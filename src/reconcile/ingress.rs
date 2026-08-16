@@ -34,6 +34,7 @@ pub(super) fn emit(
     index: &Index,
     targets: &[Target],
     rs: &mut Ruleset,
+    flowlog_enabled: bool,
 ) {
     let dst = Match::Addrs(ips.clone());
     for (name, np) in policies.iter().copied() {
@@ -53,6 +54,7 @@ pub(super) fn emit(
                     daddr: dst.clone(),
                     ports: rule.ports.clone(),
                     verdict: Verdict::Return,
+                    log_prefix: None,
                 });
             }
         }
@@ -63,6 +65,7 @@ pub(super) fn emit(
         daddr: dst,
         ports: Vec::new(),
         verdict: Verdict::Drop,
+        log_prefix: super::egress::flowlog_prefix(target, flowlog_enabled, "ingress"),
     });
 }
 

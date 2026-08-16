@@ -69,6 +69,22 @@ run a read-only socket proxy and point suho at it instead — suho honours
 
 suho needs only `CONTAINERS` (list + inspect) and `EVENTS`.
 
+## Flow log
+
+Opt-in denied-flow visibility via NFLOG:
+
+```yaml
+environment:
+  SUHO_FLOWLOG: "drops"          # log dropped flows
+  SUHO_FLOWLOG_GROUP: "100"      # NFLOG group
+  SUHO_FLOWLOG_SINK: "stdout"    # stdout
+  SUHO_FLOWLOG_RATE: "200"       # events/sec (0 = unlimited)
+```
+
+When enabled, suho emits one JSON line per dropped flow to stdout. Scrape it
+with your log shipper; it is intentionally simple and has no host-network
+listener.
+
 ## Observability
 
 With `SUHO_METRICS_ADDR` set, scrape `GET /metrics` (Prometheus) and wire

@@ -40,6 +40,33 @@ once a policy selects that container for it, and a flow is allowed only if
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design.
 
+## Flow log
+
+suho can emit structured JSON events for **dropped** flows, giving you
+Hubble-like visibility into what traffic your policies are blocking. When
+enabled, suho asks nftables to copy dropped packets to a userspace NFLOG group,
+receives them, resolves the container identity, and writes one JSON line per
+flow to stdout.
+
+Enable with environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUHO_FLOWLOG` | `off` | `off` or `drops` |
+| `SUHO_FLOWLOG_GROUP` | `100` | NFLOG group shared with nftables |
+| `SUHO_FLOWLOG_SINK` | `stdout` | destination sink for flow events |
+| `SUHO_FLOWLOG_RATE` | `200` | Per-second rate limit (0 = unlimited) |
+
+Example event:
+
+```json
+{"event":"suho_flow","verdict":"drop","dir":"egress","proto":"tcp","src":"10.0.0.2","dst":"10.0.0.5","sport":12345,"dport":443,"container":"web","peer":"db"}
+```
+
+`peer` is omitted when the other endpoint is not a known container. Only the
+first packet of each dropped flow is logged (`ct state new`) to avoid flooding
+on retransmits. No events are emitted unless `SUHO_FLOWLOG=drops` is set.
+
 ## Quickstart
 
 Run suho in the host network namespace with `CAP_NET_ADMIN`, the Docker socket
@@ -104,9 +131,11 @@ it with `cargo test -- --ignored`.
 
 Runtime config is via environment variables — `SUHO_LABEL_PREFIX`,
 `SUHO_POLICIES_PATH`, `SUHO_RESYNC_INTERVAL` (periodic full-reconcile safety net),
-`SUHO_DEBOUNCE_MS` (quiet window after a Docker event) and `SUHO_METRICS_ADDR`
-(`host:port` exposing Prometheus `/metrics`, `/healthz` and `/readyz`) — plus the
-`--dry-run` flag, which logs the resolved ruleset and applies nothing.
+`SUHO_DEBOUNCE_MS` (quiet window after a Docker event), `SUHO_METRICS_ADDR`
+(`host:port` exposing Prometheus `/metrics`, `/healthz` and `/readyz`), and the
+optional flow-log settings `SUHO_FLOWLOG`, `SUHO_FLOWLOG_GROUP`,
+`SUHO_FLOWLOG_SINK`, `SUHO_FLOWLOG_RATE` — plus the `--dry-run` flag, which logs
+the resolved ruleset and applies nothing.
 
 `suho schema` prints the JSON Schema (v1alpha1) for `policies/suho.yaml`
 (committed at `schemas/network-policies.v1alpha1.json` for editor `$schema`
