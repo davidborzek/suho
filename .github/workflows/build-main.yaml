@@ -1,0 +1,95 @@
+name: build-main
+
+# Manually build and push a multi-arch image tagged `:main` to
+# ghcr.io/<repo> - an "edge" image for smoke-testing a build before cutting a
+# release. This mirrors the release-please build path exactly (same Dockerfile,
+# same native multi-arch runners, same digest-merge), so `:main` is bit-for-bit
+# what a release would produce, just under a moving tag.
+#
+# Dispatch from any branch via the Actions UI ("Run workflow" -> pick a branch):
+# the workflow builds that branch's checkout and republishes `:main`. Run it
+# from `main` for a plain edge build, or from a feature branch to test that
+# branch's image before merge.
+on:
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # Build each architecture on its own native runner (no QEMU) and push by
+  # digest; the merge job then stitches the digests into one multi-arch tag.
+  build:
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=main
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+      - name: Inspect
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:main
