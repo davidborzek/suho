@@ -6,6 +6,7 @@
 //! (renders the ruleset, applies nothing); [`NftEnforcer`] programs nftables.
 
 mod logging;
+mod netlink;
 pub mod nft;
 mod ruleset;
 

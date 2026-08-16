@@ -1223,6 +1223,7 @@ dependencies = [
  "clap",
  "futures-util",
  "ipnetwork",
+ "nix",
  "prometheus-client",
  "rustables",
  "schemars",
