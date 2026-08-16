@@ -12,6 +12,9 @@ pub struct FlowEvent {
     /// Event type discriminator.
     #[serde(rename = "event")]
     pub event: &'static str,
+    /// Event timestamp (RFC3339 UTC): the kernel NFLOG timestamp when present,
+    /// otherwise the receiver's wall-clock receive time.
+    pub ts: String,
     /// Observed verdict (`drop` for dropped-flow logging).
     pub verdict: String,
     /// Traffic direction (`egress` or `ingress`).
@@ -40,6 +43,7 @@ impl FlowEvent {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        ts: String,
         verdict: String,
         dir: String,
         proto: String,
@@ -52,6 +56,7 @@ impl FlowEvent {
     ) -> Self {
         Self {
             event: "suho_flow",
+            ts,
             verdict,
             dir,
             proto,
@@ -176,6 +181,7 @@ mod tests {
     #[test]
     fn flow_event_json_shape() {
         let ev = FlowEvent::new(
+            "2026-01-01T00:00:00.000000Z".to_owned(),
             "drop".to_owned(),
             "egress".to_owned(),
             "tcp".to_owned(),
@@ -203,11 +209,16 @@ mod tests {
         assert!(json.contains(r#""peer":"db""#), "missing peer in {json}");
         assert!(json.contains(r#""sport":12345"#), "missing sport in {json}");
         assert!(json.contains(r#""dport":443"#), "missing dport in {json}");
+        assert!(
+            json.contains(r#""ts":"2026-01-01T00:00:00.000000Z""#),
+            "missing ts in {json}"
+        );
     }
 
     #[test]
     fn flow_event_omits_peer_when_none() {
         let ev = FlowEvent::new(
+            "2026-01-01T00:00:00.000000Z".to_owned(),
             "drop".to_owned(),
             "egress".to_owned(),
             "tcp".to_owned(),

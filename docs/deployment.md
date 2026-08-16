@@ -79,6 +79,7 @@ environment:
   SUHO_FLOWLOG_GROUP: "100"      # NFLOG group
   SUHO_FLOWLOG_SINK: "stdout"    # stdout
   SUHO_FLOWLOG_RATE: "200"       # events/sec (0 = unlimited)
+  SUHO_FLOWLOG_DEDUP: "30"       # per-flow dedup window secs (0 = off)
 ```
 
 When enabled, suho emits one JSON line per dropped flow to stdout. Scrape it

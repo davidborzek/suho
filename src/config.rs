@@ -34,6 +34,9 @@ pub struct FlowLog {
     pub sink: SinkKind,
     /// Per-second rate limit (0 = unlimited).
     pub rate: u32,
+    /// Per-flow dedup window in seconds (0 = disabled): suppress repeated
+    /// identical flows within the window. Metrics still count every packet.
+    pub dedup: u32,
 }
 
 impl Default for FlowLog {
@@ -43,6 +46,7 @@ impl Default for FlowLog {
             group: 100,
             sink: SinkKind::Stdout,
             rate: 200,
+            dedup: 30,
         }
     }
 }
@@ -152,6 +156,13 @@ fn flowlog_from_vars(vars: impl Iterator<Item = (String, String)>) -> FlowLog {
         }
     }
 
+    if let Some(raw) = vars.get("SUHO_FLOWLOG_DEDUP").filter(|s| !s.is_empty()) {
+        match raw.parse() {
+            Ok(dedup) => flowlog.dedup = dedup,
+            Err(err) => warn!(value = %raw, %err, "ignoring invalid SUHO_FLOWLOG_DEDUP"),
+        }
+    }
+
     flowlog
 }
 
@@ -189,11 +200,13 @@ mod tests {
             ("SUHO_FLOWLOG_GROUP", "42"),
             ("SUHO_FLOWLOG_SINK", "stdout"),
             ("SUHO_FLOWLOG_RATE", "0"),
+            ("SUHO_FLOWLOG_DEDUP", "5"),
         ]);
         assert_eq!(cfg.mode, FlowLogMode::Drops);
         assert_eq!(cfg.group, 42);
         assert_eq!(cfg.sink, SinkKind::Stdout);
         assert_eq!(cfg.rate, 0);
+        assert_eq!(cfg.dedup, 5);
     }
 
     #[test]

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! NFLOG receiver task.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::net::IpAddr;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, SecondsFormat};
 use nix::errno::Errno;
 use nix::sys::socket::sockopt::RcvBuf;
 use nix::sys::socket::{
@@ -40,6 +41,7 @@ const NFULNL_CFG_CMD_BIND: u8 = 1;
 const NFULNL_COPY_PACKET: u8 = 2;
 
 const NFULA_PACKET_HDR: u16 = 1;
+const NFULA_TIMESTAMP: u16 = 3;
 const NFULA_PAYLOAD: u16 = 9;
 const NFULA_PREFIX: u16 = 10;
 
@@ -58,6 +60,7 @@ pub struct Receiver {
     group: u16,
     sink: Box<dyn FlowSink + Send + Sync>,
     rate: u32,
+    dedup: u32,
     index: Arc<RwLock<IpIndex>>,
     metrics: Arc<Metrics>,
 }
@@ -68,6 +71,7 @@ impl Receiver {
         group: u16,
         sink_kind: SinkKind,
         rate: u32,
+        dedup: u32,
         index: Arc<RwLock<IpIndex>>,
         metrics: Arc<Metrics>,
     ) -> Self {
@@ -75,6 +79,7 @@ impl Receiver {
             group,
             sink: sink_for(sink_kind),
             rate,
+            dedup,
             index,
             metrics,
         }
@@ -96,10 +101,11 @@ impl Receiver {
 
         let mut buf = vec![0u8; READ_BUF_BYTES];
         let mut limiter = RateLimiter::new(self.rate);
+        let mut deduper = Deduper::new(self.dedup);
         loop {
             match socket::recv(fd.as_raw_fd(), &mut buf, MsgFlags::empty()) {
                 Ok(0) => break,
-                Ok(n) => self.scan(&buf[..n], &mut limiter),
+                Ok(n) => self.scan(&buf[..n], &mut limiter, &mut deduper),
                 Err(Errno::EINTR) => continue,
                 Err(err) => {
                     warn!(%err, "NFLOG recv error; stopping flow-log receiver");
@@ -111,7 +117,7 @@ impl Receiver {
         info!("NFLOG flow-log receiver stopped");
     }
 
-    fn scan(&self, buf: &[u8], limiter: &mut RateLimiter) {
+    fn scan(&self, buf: &[u8], limiter: &mut RateLimiter, deduper: &mut Deduper) {
         let mut off = 0;
         while off + NLMSG_HDRLEN <= buf.len() {
             let len = read_u32_ne(buf, off) as usize;
@@ -122,17 +128,21 @@ impl Receiver {
             let expected_type = NFNL_SUBSYS_ULOG << 8 | u16::from(NFULNL_MSG_PACKET);
             if msg_type == expected_type {
                 if let Some(ev) = parse_nflog_packet(buf, off, len, &self.index) {
-                    // Count every flow (ground truth); the rate limiter only
-                    // throttles how many reach the log sink.
+                    // Count every flow (ground truth), before dedup/rate limit.
                     self.metrics.flow_event(
                         ev.verdict.clone(),
                         ev.dir.clone(),
                         ev.container.clone(),
                     );
-                    if limiter.allow() {
-                        self.sink.emit(&ev);
-                    } else {
-                        self.metrics.flow_ratelimited();
+                    // `ct state new` does NOT dedup dropped flows (a dropped
+                    // packet's conntrack entry is never confirmed, so every
+                    // packet re-enters state NEW), so suppress repeats here.
+                    if deduper.allow(&ev) {
+                        if limiter.allow() {
+                            self.sink.emit(&ev);
+                        } else {
+                            self.metrics.flow_ratelimited();
+                        }
                     }
                 }
             } else if msg_type == NLMSG_ERROR {
@@ -229,6 +239,7 @@ fn parse_nflog_packet(
     let mut prefix = String::new();
     let mut payload = None;
     let mut _hw_protocol = None;
+    let mut ts_us: Option<(i64, u32)> = None;
 
     while off + NLA_HDRLEN <= msg_end {
         let attr_len = read_u16_le(buf, off) as usize;
@@ -251,6 +262,12 @@ fn parse_nflog_packet(
             }
             NFULA_PAYLOAD => {
                 payload = Some(&buf[payload_start..payload_end]);
+            }
+            // struct nfulnl_msg_packet_timestamp { be64 sec; be64 usec; }
+            NFULA_TIMESTAMP if payload_end >= payload_start + 16 => {
+                let sec = read_u64_be(buf, payload_start) as i64;
+                let usec = read_u64_be(buf, payload_start + 8) as u32;
+                ts_us = Some((sec, usec));
             }
             _ => {}
         }
@@ -276,8 +293,18 @@ fn parse_nflog_packet(
     };
     drop(index_guard);
 
+    let (secs, micros) = ts_us.unwrap_or_else(|| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        (now.as_secs() as i64, now.subsec_micros())
+    });
+    let ts = DateTime::from_timestamp(secs, micros * 1_000)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Micros, true))
+        .unwrap_or_default();
+
     Some(FlowEvent::new(
-        verdict, dir, proto, src, dst, sport, dport, container, peer,
+        ts, verdict, dir, proto, src, dst, sport, dport, container, peer,
     ))
 }
 
@@ -315,6 +342,12 @@ fn read_i32_ne(buf: &[u8], off: usize) -> i32 {
     i32::from_ne_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
 }
 
+fn read_u64_be(buf: &[u8], off: usize) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&buf[off..off + 8]);
+    u64::from_be_bytes(b)
+}
+
 /// Simple token-bucket rate limiter.
 struct RateLimiter {
     rate: u32,
@@ -348,6 +381,62 @@ impl RateLimiter {
     }
 }
 
+/// Per-flow dedup: suppresses repeated identical flows within a time window so
+/// a persistent blocked flow logs at most once per window. Metrics still count
+/// every packet (see `scan`). A zero window disables dedup.
+struct Deduper {
+    window: Duration,
+    seen: HashMap<String, Instant>,
+    last_sweep: Instant,
+}
+
+impl Deduper {
+    fn new(window_secs: u32) -> Self {
+        Self {
+            window: Duration::from_secs(u64::from(window_secs)),
+            seen: HashMap::new(),
+            last_sweep: Instant::now(),
+        }
+    }
+
+    /// Returns `true` if this flow should be emitted (not logged within the
+    /// window); records the emission time.
+    fn allow(&mut self, ev: &FlowEvent) -> bool {
+        if self.window.is_zero() {
+            return true;
+        }
+        let now = Instant::now();
+        if now.duration_since(self.last_sweep) >= self.window {
+            let window = self.window;
+            self.seen.retain(|_, &mut t| now.duration_since(t) < window);
+            self.last_sweep = now;
+        }
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}",
+            ev.dir,
+            ev.proto,
+            ev.src,
+            ev.sport.unwrap_or(0),
+            ev.dst,
+            ev.dport.unwrap_or(0),
+        );
+        match self.seen.entry(key) {
+            Entry::Occupied(mut e) => {
+                if now.duration_since(*e.get()) < self.window {
+                    false
+                } else {
+                    e.insert(now);
+                    true
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(now);
+                true
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +447,44 @@ mod tests {
         for _ in 0..10 {
             assert!(limiter.allow());
         }
+    }
+
+    #[test]
+    fn deduper_suppresses_repeats_within_window() {
+        let mut d = Deduper::new(60);
+        let ev = FlowEvent::new(
+            "t".to_owned(),
+            "drop".to_owned(),
+            "egress".to_owned(),
+            "udp".to_owned(),
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.255".parse().unwrap(),
+            Some(1),
+            Some(2),
+            "web".to_owned(),
+            None,
+        );
+        assert!(d.allow(&ev));
+        assert!(!d.allow(&ev));
+    }
+
+    #[test]
+    fn deduper_zero_window_disabled() {
+        let mut d = Deduper::new(0);
+        let ev = FlowEvent::new(
+            "t".to_owned(),
+            "drop".to_owned(),
+            "egress".to_owned(),
+            "udp".to_owned(),
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.255".parse().unwrap(),
+            Some(1),
+            Some(2),
+            "web".to_owned(),
+            None,
+        );
+        assert!(d.allow(&ev));
+        assert!(d.allow(&ev));
     }
 
     #[test]

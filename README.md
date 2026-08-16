@@ -56,16 +56,20 @@ Enable with environment variables:
 | `SUHO_FLOWLOG_GROUP` | `100` | NFLOG group shared with nftables |
 | `SUHO_FLOWLOG_SINK` | `stdout` | destination sink for flow events |
 | `SUHO_FLOWLOG_RATE` | `200` | Per-second rate limit (0 = unlimited) |
+| `SUHO_FLOWLOG_DEDUP` | `30` | Per-flow dedup window in seconds (0 = disabled) |
 
 Example event:
 
 ```json
-{"event":"suho_flow","verdict":"drop","dir":"egress","proto":"tcp","src":"10.0.0.2","dst":"10.0.0.5","sport":12345,"dport":443,"container":"web","peer":"db"}
+{"event":"suho_flow","ts":"2026-08-16T17:57:58.946393Z","verdict":"drop","dir":"egress","proto":"tcp","src":"10.0.0.2","dst":"10.0.0.5","sport":12345,"dport":443,"container":"web","peer":"db"}
 ```
 
-`peer` is omitted when the other endpoint is not a known container. Only the
-first packet of each dropped flow is logged (`ct state new`) to avoid flooding
-on retransmits. No events are emitted unless `SUHO_FLOWLOG=drops` is set.
+`ts` is the kernel NFLOG timestamp (receiver wall-clock time as a fallback).
+`peer` is omitted when the other endpoint is not a known container. Repeated
+identical flows are collapsed to at most one line per `SUHO_FLOWLOG_DEDUP`
+window — a dropped flow re-enters conntrack state `new` on every packet, so it
+would otherwise log continuously. No events are emitted unless
+`SUHO_FLOWLOG=drops` is set.
 
 ## Quickstart
 

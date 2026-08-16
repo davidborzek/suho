@@ -110,6 +110,7 @@ async fn run(dry_run: bool) -> Result<()> {
             config.flowlog.group,
             config.flowlog.sink,
             config.flowlog.rate,
+            config.flowlog.dedup,
             Arc::clone(&ip_index),
             Arc::clone(&metrics),
         );

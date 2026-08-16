@@ -413,8 +413,10 @@ fn network_neq(mut rule: NftRule, cidr: &Cidr, source: bool) -> Result<NftRule> 
     Ok(rule)
 }
 
-/// Match `ct state new` so each dropped flow is logged once (the first packet),
-/// not on every retransmit.
+/// Match `ct state new` before the drop's `log`. Note this does NOT dedup
+/// dropped flows: a dropped packet's conntrack entry is never confirmed, so
+/// every packet re-enters state NEW. Repeat suppression is done in the
+/// flow-log receiver (`SUHO_FLOWLOG_DEDUP`).
 fn add_ct_state_new(mut rule: NftRule) -> Result<NftRule> {
     rule.add_expr(Conntrack::new(ConntrackKey::State));
     let mask = ConnTrackState::NEW.bits();
