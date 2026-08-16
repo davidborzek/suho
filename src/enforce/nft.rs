@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 use rustables::expr::{
     Bitwise, Cmp, CmpOp, ConnTrackState, Conntrack, ConntrackKey, HighLevelPayload,
@@ -194,11 +194,9 @@ impl Enforcer for NftEnforcer {
         batch.add(&jump(&forward, EGRESS_CHAIN)?, MsgType::Add);
         batch.add(&jump(&forward, INGRESS_CHAIN)?, MsgType::Add);
 
-        // `QueryError`'s Display hides the kernel errno inside `nlmsgerr`; its
-        // Debug form surfaces it (e.g. `error: 22` = EINVAL).
-        batch
-            .send()
-            .map_err(|err| anyhow!("applying nftables ruleset: {err:?}"))?;
+        // send_batch forces a large netlink receive buffer (rustables' own
+        // Batch::send does not), and surfaces the kernel errno on rejection.
+        super::netlink::send_batch(batch).context("applying nftables ruleset")?;
         info!(
             sets = ruleset.sets.len(),
             egress = ruleset.egress.len(),
