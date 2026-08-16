@@ -23,8 +23,9 @@ use super::{FlowEvent, FlowSink, parse_packet, parse_prefix, sink_for};
 /// Shared IP → container name index used to resolve flow endpoints.
 pub type IpIndex = HashMap<IpAddr, String>;
 
-/// NFLOG subsystem and message constants.
-const NFNL_SUBSYS_ULOG: u16 = 6;
+/// NFLOG subsystem and message constants. `nfnetlink_log` is subsystem 4
+/// (`NFNL_SUBSYS_ULOG`); it drives both the config messages and the packet type.
+const NFNL_SUBSYS_ULOG: u16 = 4;
 const NFULNL_MSG_PACKET: u8 = 0;
 const NFULNL_MSG_CONFIG: u8 = 1;
 
