@@ -40,6 +40,11 @@ const NFULNL_CFG_MODE: u16 = 2;
 const NFULNL_CFG_CMD_BIND: u8 = 1;
 const NFULNL_COPY_PACKET: u8 = 2;
 
+/// Bytes of each packet NFLOG copies to userspace. We only parse L3/L4
+/// headers, so cap it well below the packet size (the copy is the dominant
+/// per-event kernel cost); 256 B covers IPv4/IPv6 + TCP options / UDP.
+const NFLOG_COPY_RANGE: u32 = 256;
+
 const NFULA_PACKET_HDR: u16 = 1;
 const NFULA_TIMESTAMP: u16 = 3;
 const NFULA_PAYLOAD: u16 = 9;
@@ -184,9 +189,9 @@ fn send_config_bind(sock: &OwnedFd, group: u16) -> Result<()> {
 }
 
 fn send_config_mode(sock: &OwnedFd, group: u16) -> Result<()> {
-    // nfulnl_msg_config_mode { copy_range: u32 BE, copy_mode: u8, _pad: u8 }
+    // nfulnl_msg_config_mode { copy_range: u32 BE, copy_mode: u8, _pad: u8 }.
     let mut payload = Vec::with_capacity(6);
-    payload.extend_from_slice(&0x0000FFFFu32.to_be_bytes());
+    payload.extend_from_slice(&NFLOG_COPY_RANGE.to_be_bytes());
     payload.push(NFULNL_COPY_PACKET);
     payload.push(0);
     send_config_msg(sock, group, NFULNL_CFG_MODE, &payload, 2)
