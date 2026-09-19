@@ -20,7 +20,7 @@ clap = { version = "4.5", features = ["derive"] }
 futures-util = "0.3.33"
 ipnetwork = "0.21"
 nix = { version = "0.31", features = ["socket"] }
-prometheus-client = "0.22"
+prometheus-client = "0.25"
 rustables = "=0.8.8"
 schemars = "1.2.1"
 serde = { version = "1.0.229", features = ["derive"] }
