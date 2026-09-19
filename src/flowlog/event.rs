@@ -110,7 +110,9 @@ pub fn parse_packet(payload: &[u8]) -> Result<PacketInfo> {
             IpAddr::V6(Ipv6Addr::from(h.destination)),
             h.next_header.into(),
         ),
-        None => anyhow::bail!("payload is not an IPv4/IPv6 packet"),
+        None | Some(etherparse::NetHeaders::Arp(_)) => {
+            anyhow::bail!("payload is not an IPv4/IPv6 packet")
+        }
     };
 
     let (sport, dport) = match headers.transport {
