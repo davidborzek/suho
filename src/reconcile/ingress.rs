@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use crate::api::v1alpha1::{NetworkPolicy, PolicyType};
+use crate::api::v1alpha1::{NetworkPolicy, PolicyType, RuleAction};
 use crate::docker::Target;
 use crate::enforce::{Match, Rule, Ruleset, Verdict};
 
@@ -24,9 +24,8 @@ pub(super) fn enforces(np: &NetworkPolicy) -> bool {
         || (np.policy_types.is_empty() && !np.ingress.is_empty())
 }
 
-/// Append `suho_ingress` rules for one container: `return` for every allowed
-/// source (union across the container's ingress policies), then a single
-/// default-deny `drop`.
+/// Append `suho_ingress` rules: explicit `drop` rules first (deny wins), then
+/// `return` per allowed source, then the default-deny `drop`.
 pub(super) fn emit(
     target: &Target,
     ips: &BTreeSet<IpAddr>,
@@ -39,6 +38,39 @@ pub(super) fn emit(
     let dst = Match::Addrs(ips.clone());
     for (name, np) in policies.iter().copied() {
         for rule in &np.ingress {
+            if rule.action != RuleAction::Drop {
+                continue;
+            }
+            let sources = if rule.from.is_empty() {
+                vec![Match::Any]
+            } else {
+                rule.from
+                    .iter()
+                    .filter_map(|peer| resolve_peer(peer, index, targets, rs))
+                    .collect()
+            };
+            let logged = rule.log.unwrap_or(true);
+            for saddr in sources {
+                rs.ingress.push(Rule {
+                    comment: format!("{}/{name} ingress deny", target.name),
+                    saddr,
+                    daddr: dst.clone(),
+                    ports: rule.ports.clone(),
+                    verdict: Verdict::Drop,
+                    log_prefix: if logged {
+                        super::egress::flowlog_prefix(target, flowlog_enabled, "ingress")
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+    }
+    for (name, np) in policies.iter().copied() {
+        for rule in &np.ingress {
+            if rule.action != RuleAction::Allow {
+                continue;
+            }
             let sources = if rule.from.is_empty() {
                 vec![Match::Any]
             } else {

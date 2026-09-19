@@ -21,6 +21,18 @@ pub enum PolicyType {
     Egress,
 }
 
+/// What a rule does with matching traffic. Defaults to `allow`; `drop` rules
+/// are compiled before every allow rule, so a deny wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleAction {
+    /// Pass matching traffic (the default).
+    #[default]
+    Allow,
+    /// Drop matching traffic before any allow rule is considered.
+    Drop,
+}
+
 /// L4 protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -150,7 +162,8 @@ impl fmt::Display for Peer {
     }
 }
 
-/// An ingress rule: allow traffic *from* these peers on these ports.
+/// An ingress rule: allow (or, with `action: drop`, deny) traffic *from* these
+/// peers on these ports.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IngressRule {
@@ -158,9 +171,17 @@ pub struct IngressRule {
     pub from: Vec<Peer>,
     #[serde(default)]
     pub ports: Vec<Port>,
+    /// `drop` denies matching traffic; defaults to `allow`.
+    #[serde(default)]
+    pub action: RuleAction,
+    /// Whether drops by this rule emit a flow-log event; omitted = `true`.
+    /// Only meaningful with `action: drop`.
+    #[serde(default)]
+    pub log: Option<bool>,
 }
 
-/// An egress rule: allow traffic *to* these peers on these ports.
+/// An egress rule: allow (or, with `action: drop`, deny) traffic *to* these
+/// peers on these ports.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EgressRule {
@@ -168,6 +189,13 @@ pub struct EgressRule {
     pub to: Vec<Peer>,
     #[serde(default)]
     pub ports: Vec<Port>,
+    /// `drop` denies matching traffic; defaults to `allow`.
+    #[serde(default)]
+    pub action: RuleAction,
+    /// Whether drops by this rule emit a flow-log event; omitted = `true`.
+    /// Only meaningful with `action: drop`.
+    #[serde(default)]
+    pub log: Option<bool>,
 }
 
 /// A single network policy (≈ one Kubernetes `NetworkPolicy` spec).
@@ -315,7 +343,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        PolicyType, Port, Protocol, inline_policies, parse_globals, parse_inline, selector_matches,
+        PolicyType, Port, Protocol, RuleAction, inline_policies, parse_globals, parse_inline,
+        selector_matches,
     };
 
     #[test]
@@ -445,5 +474,28 @@ egress:
     #[test]
     fn rejects_unknown_peer_field() {
         assert!(parse_inline("ingress:\n  - from: [{containr: db}]\n").is_err());
+    }
+
+    #[test]
+    fn action_defaults_to_allow_log_to_true() {
+        let np = parse_inline("egress:\n  - to: [{container: db}]\n").unwrap();
+        assert_eq!(np.egress[0].action, RuleAction::Allow);
+        assert_eq!(np.egress[0].log, None);
+    }
+
+    #[test]
+    fn parses_explicit_drop_rule() {
+        let np = parse_inline(
+            "egress:\n  - action: drop\n    to: [{container: db}]\n    ports: [\"5432/tcp\"]\n    log: false\n",
+        )
+        .unwrap();
+        assert_eq!(np.egress[0].action, RuleAction::Drop);
+        assert_eq!(np.egress[0].log, Some(false));
+        assert_eq!(np.egress[0].ports[0].number, Some(5432));
+    }
+
+    #[test]
+    fn rejects_unknown_action() {
+        assert!(parse_inline("egress:\n  - action: deny\n").is_err());
     }
 }

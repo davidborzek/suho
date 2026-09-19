@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use crate::api::v1alpha1::{NetworkPolicy, PolicyType};
+use crate::api::v1alpha1::{NetworkPolicy, PolicyType, RuleAction};
 use crate::docker::Target;
 use crate::enforce::{Match, Rule, Ruleset, Verdict};
 
@@ -24,9 +24,8 @@ pub(super) fn enforces(np: &NetworkPolicy) -> bool {
         || (np.policy_types.is_empty() && !np.egress.is_empty())
 }
 
-/// Append `suho_egress` rules for one container: `return` for every allowed
-/// destination (union across the container's egress policies), then a single
-/// default-deny `drop` — so one policy's deny never shadows another's allow.
+/// Append `suho_egress` rules: explicit `drop` rules first (deny wins), then
+/// `return` per allowed destination, then the default-deny `drop`.
 pub(super) fn emit(
     target: &Target,
     ips: &BTreeSet<IpAddr>,
@@ -39,6 +38,39 @@ pub(super) fn emit(
     let src = Match::Addrs(ips.clone());
     for (name, np) in policies.iter().copied() {
         for rule in &np.egress {
+            if rule.action != RuleAction::Drop {
+                continue;
+            }
+            let dests = if rule.to.is_empty() {
+                vec![Match::Any]
+            } else {
+                rule.to
+                    .iter()
+                    .filter_map(|peer| resolve_peer(peer, index, targets, rs))
+                    .collect()
+            };
+            let logged = rule.log.unwrap_or(true);
+            for daddr in dests {
+                rs.egress.push(Rule {
+                    comment: format!("{}/{name} egress deny", target.name),
+                    saddr: src.clone(),
+                    daddr,
+                    ports: rule.ports.clone(),
+                    verdict: Verdict::Drop,
+                    log_prefix: if logged {
+                        flowlog_prefix(target, flowlog_enabled, "egress")
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+    }
+    for (name, np) in policies.iter().copied() {
+        for rule in &np.egress {
+            if rule.action != RuleAction::Allow {
+                continue;
+            }
             let dests = if rule.to.is_empty() {
                 vec![Match::Any]
             } else {
