@@ -335,6 +335,91 @@ mod tests {
     }
 
     #[test]
+    fn drop_rule_precedes_allows_and_can_opt_out_of_flowlog() {
+        let app = tgt(
+            "app",
+            "10.0.0.2",
+            &[
+                (
+                    "suho.networkpolicy.a",
+                    "policyTypes: [Egress]\negress:\n  - to: [{container: db}]\n    ports: [\"5432/tcp\"]\n",
+                ),
+                (
+                    "suho.networkpolicy.b",
+                    "egress:\n  - action: drop\n    to: [{container: db}]\n    ports: [\"5432/tcp\"]\n    log: false\n",
+                ),
+            ],
+        );
+        let db = tgt("db", "10.0.0.5", &[]);
+        let flowlog = FlowLog {
+            mode: FlowLogMode::Drops,
+            ..FlowLog::default()
+        };
+        let rs = compile(&[app, db], "suho", &[], &flowlog);
+
+        // deny, allow, default-deny
+        let verdicts: Vec<Verdict> = rs.egress.iter().map(|r| r.verdict).collect();
+        assert_eq!(
+            verdicts,
+            vec![Verdict::Drop, Verdict::Return, Verdict::Drop]
+        );
+        // The explicit deny opted out of flow logging; the default-deny still logs.
+        assert!(rs.egress[0].log_prefix.is_none());
+        assert!(rs.egress[2].log_prefix.is_some());
+        assert_eq!(rs.egress[0].ports, vec![port("5432/tcp")]);
+        assert!(rs.egress[0].comment.contains("deny"));
+    }
+
+    #[test]
+    fn drop_rule_without_flowlog_flag_still_logs() {
+        let app = tgt(
+            "app",
+            "10.0.0.2",
+            &[(
+                "suho.networkpolicy.a",
+                "policyTypes: [Egress]\negress:\n  - action: drop\n    to: [{cidr: 10.9.9.0/24}]\n",
+            )],
+        );
+        let flowlog = FlowLog {
+            mode: FlowLogMode::Drops,
+            ..FlowLog::default()
+        };
+        let rs = compile(&[app], "suho", &[], &flowlog);
+
+        assert_eq!(egress_drops(&rs), 2); // explicit deny + default-deny, both logged
+        assert!(rs.egress[0].log_prefix.is_some());
+        assert!(rs.egress[1].log_prefix.is_some());
+    }
+
+    #[test]
+    fn ingress_drop_rule_precedes_allows() {
+        let db = tgt(
+            "db",
+            "10.0.0.5",
+            &[(
+                "suho.networkpolicy.a",
+                "policyTypes: [Ingress]\ningress:\n  - action: drop\n    from: [{container: evil}]\n    log: false\n  - from: [{container: app}]\n    ports: [\"5432/tcp\"]\n",
+            )],
+        );
+        let app = tgt("app", "10.0.0.2", &[]);
+        let evil = tgt("evil", "10.0.0.9", &[]);
+        let flowlog = FlowLog {
+            mode: FlowLogMode::Drops,
+            ..FlowLog::default()
+        };
+        let rs = compile(&[db, app, evil], "suho", &[], &flowlog);
+
+        // deny, allow, default-deny
+        let verdicts: Vec<Verdict> = rs.ingress.iter().map(|r| r.verdict).collect();
+        assert_eq!(
+            verdicts,
+            vec![Verdict::Drop, Verdict::Return, Verdict::Drop]
+        );
+        assert!(rs.ingress[0].log_prefix.is_none());
+        assert!(rs.ingress[2].log_prefix.is_some());
+    }
+
+    #[test]
     fn egress_to_cidr() {
         let app = tgt(
             "app",

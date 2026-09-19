@@ -8,9 +8,21 @@
   },
   "$defs": {
     "EgressRule": {
-      "description": "An egress rule: allow traffic *to* these peers on these ports.",
+      "description": "An egress rule: allow (or, with `action: drop`, deny) traffic *to* these\npeers on these ports.",
       "type": "object",
       "properties": {
+        "action": {
+          "description": "`drop` denies matching traffic; defaults to `allow`.",
+          "$ref": "#/$defs/RuleAction"
+        },
+        "log": {
+          "description": "Whether drops by this rule emit a flow-log event; omitted = `true`.\nOnly meaningful with `action: drop`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "ports": {
           "type": "array",
           "items": {
@@ -66,14 +78,26 @@
       }
     },
     "IngressRule": {
-      "description": "An ingress rule: allow traffic *from* these peers on these ports.",
+      "description": "An ingress rule: allow (or, with `action: drop`, deny) traffic *from* these\npeers on these ports.",
       "type": "object",
       "properties": {
+        "action": {
+          "description": "`drop` denies matching traffic; defaults to `allow`.",
+          "$ref": "#/$defs/RuleAction"
+        },
         "from": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/Peer"
           }
+        },
+        "log": {
+          "description": "Whether drops by this rule emit a flow-log event; omitted = `true`.\nOnly meaningful with `action: drop`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
         },
         "ports": {
           "type": "array",
@@ -146,6 +170,21 @@
         "53/udp",
         "80",
         "32000-32768/tcp"
+      ]
+    },
+    "RuleAction": {
+      "description": "What a rule does with matching traffic. Defaults to `allow`; `drop` rules\nare compiled before every allow rule, so a deny wins.",
+      "oneOf": [
+        {
+          "description": "Pass matching traffic (the default).",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Drop matching traffic before any allow rule is considered.",
+          "type": "string",
+          "const": "drop"
+        }
       ]
     }
   }

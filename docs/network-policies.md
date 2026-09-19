@@ -133,6 +133,21 @@ peers on **any** of its `ports`. Each `egress` rule is the same for outbound `to
 peers. Multiple rules, and multiple peers within a rule, combine as a logical
 **OR**; the `ports` on a rule restrict that rule's peers.
 
+By default a rule **allows**. A rule with `action: drop` denies instead — drop
+rules are evaluated before every allow rule of that direction, so a deny
+always wins:
+
+```yaml
+egress:
+  - action: drop
+    to: [{container: database}]
+    ports: ["5432/tcp"]
+    log: false
+```
+
+Drops emit a flow-log event like the default-deny does, unless the rule sets
+`log: false` (see the flow log section in the README).
+
 An empty peer list (`from: []` / `to: []`) or a rule with no peers means **all
 peers** — use it to allow all traffic in that direction (see default policies
 below).
