@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0](https://github.com/davidborzek/suho/compare/v0.2.0...v0.3.0) (2026-09-19)
+
+
+### Features
+
+* **policy:** explicit deny rules with per-rule flow-log opt-out ([#10](https://github.com/davidborzek/suho/issues/10)) ([ae7aa84](https://github.com/davidborzek/suho/commit/ae7aa843b0e986e0d258edd8095125acf29bc224)), closes [#7](https://github.com/davidborzek/suho/issues/7)
+
+
+### Bug Fixes
+
+* **nft:** force a large netlink send buffer to avoid EMSGSIZE ([#8](https://github.com/davidborzek/suho/issues/8)) ([0286cd4](https://github.com/davidborzek/suho/commit/0286cd433214142904e6d3cabc533e7ec6d73372))
+
 ## [0.2.0](https://github.com/davidborzek/suho/compare/v0.1.1...v0.2.0) (2026-08-16)
 
 
