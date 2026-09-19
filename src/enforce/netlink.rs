@@ -1,25 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Sends a finalized `rustables` batch over a netlink socket we control.
 //!
-//! `rustables::Batch::send()` opens its socket with the default `SO_RCVBUF`
-//! (`net.core.rmem_default`, ~208 KiB) and never enlarges it. A full-table
-//! atomic replace makes the kernel answer with a burst of per-object acks; once
-//! that burst exceeds the socket's receive queue the next `recv()` fails with
-//! `ENOBUFS`. rustables exposes no hook to size the socket, but `Batch::finalize`
-//! is public — so we serialize the batch, send it on our own socket with a large
-//! forced receive buffer, and drain the acks ourselves.
+//! Both socket buffers need forcing beyond their defaults, for two different
+//! reasons:
 //!
-//! Forcing a 16 MiB receive buffer is exactly what `nft`, `iptables-nft` and OVS
-//! do for the same reason. `SO_RCVBUFFORCE` bypasses `net.core.rmem_max` and
-//! needs `CAP_NET_ADMIN`, which suho already holds to program nftables — so no
-//! host sysctl tuning is required.
+//! * **Receive (`SO_RCVBUF`)**: `rustables::Batch::send()` opens its socket with
+//!   the default `SO_RCVBUF` (`net.core.rmem_default`, ~208 KiB) and never
+//!   enlarges it. A full-table atomic replace makes the kernel answer with a
+//!   burst of per-object acks; once that burst exceeds the socket's receive
+//!   queue the next `recv()` fails with `ENOBUFS`. rustables exposes no hook to
+//!   size the socket, but `Batch::finalize` is public — so we serialize the
+//!   batch, send it on our own socket, and drain the acks ourselves.
+//! * **Send (`SO_SNDBUF`)**: the whole batch is ONE netlink datagram, and
+//!   `netlink_sendmsg()` rejects any datagram larger than `sk_sndbuf - 32` with
+//!   `EMSGSIZE` — so a full-table replace larger than `net.core.wmem_default`
+//!   (~208 KiB) never reaches the kernel. Netlink is datagram oriented, a
+//!   failed send cannot be resumed: the batch must fit whole.
+//!
+//! Forcing 16 MiB buffers is exactly what `nft`, `iptables-nft` and OVS do for
+//! the same reasons (`nft` chunks its own generated batches at 128 KiB, but its
+//! netlink sockets still run with enlarged buffers). `SO_RCVBUFFORCE`/
+//! `SO_SNDBUFFORCE` bypass `net.core.{r,w}mem_max` and need `CAP_NET_ADMIN`,
+//! which suho already holds to program nftables — so no host sysctl tuning is
+//! required.
 
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 
 use anyhow::{Context, Result, anyhow};
-use nix::sys::socket::sockopt::{RcvBuf, RcvBufForce};
+use nix::sys::socket::sockopt::{RcvBuf, RcvBufForce, SndBuf, SndBufForce};
 use nix::sys::socket::{
     self, AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType, setsockopt,
 };
@@ -30,6 +40,11 @@ use tracing::warn;
 /// each, so this covers a full-table replace of well over a hundred thousand
 /// objects.
 const RCVBUF_BYTES: usize = 16 * 1024 * 1024;
+
+/// Forced netlink send buffer. The batch is a single datagram that must fit in
+/// `sk_sndbuf - 32` (see module docs); 16 MiB covers full-table replaces of
+/// well over a hundred thousand objects on a single host.
+const SNDBUF_BYTES: usize = 16 * 1024 * 1024;
 
 /// Userspace read buffer. Netlink never splits a single message across reads, so
 /// this only bounds how many complete ack messages one `recv` drains at once.
@@ -65,14 +80,26 @@ pub(super) fn send_batch(batch: Batch) -> Result<()> {
         }
     }
 
+    // Enlarge the send buffer before sending: the whole batch is one datagram
+    // and netlink_sendmsg() fails it wholesale with EMSGSIZE otherwise.
+    if let Err(force_err) = setsockopt(&sock, SndBufForce, &SNDBUF_BYTES) {
+        // No CAP_NET_ADMIN? fall back to the wmem_max-capped SO_SNDBUF.
+        if let Err(capped_err) = setsockopt(&sock, SndBuf, &SNDBUF_BYTES) {
+            warn!(
+                force = %force_err,
+                capped = %capped_err,
+                "could not enlarge the netlink send buffer; large rulesets may hit EMSGSIZE"
+            );
+        }
+    }
+
     // Not strictly required, but keeps strace/nlmon decoding sane.
     socket::bind(sock.as_raw_fd(), &NetlinkAddr::new(0, 0)).context("binding netlink socket")?;
 
-    let mut sent = 0;
-    while sent < bytes.len() {
-        sent += socket::send(sock.as_raw_fd(), &bytes[sent..], MsgFlags::empty())
-            .context("sending nftables batch")?;
-    }
+    // Netlink is datagram oriented: a send either delivers the whole batch or
+    // fails (EMSGSIZE etc.) — there is no partial-send resumption.
+    socket::send(sock.as_raw_fd(), &bytes, MsgFlags::empty())
+        .with_context(|| format!("sending nftables batch ({} bytes)", bytes.len()))?;
 
     drain_acks(sock.as_raw_fd(), terminal)
 }
