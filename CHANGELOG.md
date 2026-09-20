@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.1](https://github.com/davidborzek/suho/compare/v0.3.0...v0.3.1) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate etherparse to 0.21 ([#13](https://github.com/davidborzek/suho/issues/13)) ([df0a697](https://github.com/davidborzek/suho/commit/df0a697fe3df46eff398a13d2dfac83bcdd9f42c))
+* **deps:** update rust crate prometheus-client to 0.25 ([#14](https://github.com/davidborzek/suho/issues/14)) ([ed5b9e3](https://github.com/davidborzek/suho/commit/ed5b9e3f84108ffd96aeba9988c6cf918b604ea1))
+* renovate config casing (lockFileMaintenance) ([4ed3eff](https://github.com/davidborzek/suho/commit/4ed3eff8a00036761324589ea6eb495aec4522d1))
+
 ## [0.3.0](https://github.com/davidborzek/suho/compare/v0.2.0...v0.3.0) (2026-09-19)
 
 
