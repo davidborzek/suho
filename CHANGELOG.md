@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.1](https://github.com/davidborzek/suho/compare/v0.3.0...v0.3.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **deps:** bump syn to 3.0.9 for bindgen 0.73 compat ([0f0ace0](https://github.com/davidborzek/suho/commit/0f0ace06ad583fa932c4d6ff35228a5020c5c340))
+* **deps:** update rust crate etherparse to 0.21 ([#13](https://github.com/davidborzek/suho/issues/13)) ([df0a697](https://github.com/davidborzek/suho/commit/df0a697fe3df46eff398a13d2dfac83bcdd9f42c))
+* **deps:** update rust crate prometheus-client to 0.25 ([#14](https://github.com/davidborzek/suho/issues/14)) ([ed5b9e3](https://github.com/davidborzek/suho/commit/ed5b9e3f84108ffd96aeba9988c6cf918b604ea1))
+* **deps:** update rust crate rustables to v0.9.0 ([#23](https://github.com/davidborzek/suho/issues/23)) ([daf0a89](https://github.com/davidborzek/suho/commit/daf0a8996c667d17b9adc8287ecc4e9c7d98b3aa))
+* renovate config casing (lockFileMaintenance) ([4ed3eff](https://github.com/davidborzek/suho/commit/4ed3eff8a00036761324589ea6eb495aec4522d1))
+* replace unmaintained serde_yaml_ng with serde-saphyr ([8279c6d](https://github.com/davidborzek/suho/commit/8279c6deeed16b18ba650dbf0494c27b88fbcc00))
+
 ## [0.3.0](https://github.com/davidborzek/suho/compare/v0.2.0...v0.3.0) (2026-09-19)
 
 
