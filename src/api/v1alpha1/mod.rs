@@ -289,8 +289,8 @@ impl From<StrictGlobal> for GlobalPolicy {
 /// # Errors
 /// Returns an error if the value is not a valid [`NetworkPolicy`], including an
 /// unknown/misspelled field.
-pub fn parse_inline(value: &str) -> Result<NetworkPolicy, serde_yaml_ng::Error> {
-    serde_yaml_ng::from_str::<StrictPolicy>(value).map(Into::into)
+pub fn parse_inline(value: &str) -> Result<NetworkPolicy, serde_saphyr::Error> {
+    serde_saphyr::from_str::<StrictPolicy>(value).map(Into::into)
 }
 
 /// Parse a `policies/suho.yaml` document (a list of [`GlobalPolicy`]).
@@ -298,8 +298,8 @@ pub fn parse_inline(value: &str) -> Result<NetworkPolicy, serde_yaml_ng::Error> 
 /// # Errors
 /// Returns an error if the document is not a valid list of policies, including
 /// an unknown/misspelled field.
-pub fn parse_globals(text: &str) -> Result<Vec<GlobalPolicy>, serde_yaml_ng::Error> {
-    serde_yaml_ng::from_str::<Vec<StrictGlobal>>(text)
+pub fn parse_globals(text: &str) -> Result<Vec<GlobalPolicy>, serde_saphyr::Error> {
+    serde_saphyr::from_str::<Vec<StrictGlobal>>(text)
         .map(|raws| raws.into_iter().map(Into::into).collect())
 }
 

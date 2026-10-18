@@ -286,14 +286,15 @@ fn expand(
                     if let Some(port) = port {
                         r = apply_port(r, port);
                     }
-                    if rule.verdict == Verdict::Drop && rule.log_prefix.is_some() {
-                        if let Some(group) = flowlog_group {
-                            r = add_ct_state_new(r)?;
-                            r.add_expr(
-                                Log::new(Some(group), rule.log_prefix.clone())
-                                    .context("log expression")?,
-                            );
-                        }
+                    if rule.verdict == Verdict::Drop
+                        && rule.log_prefix.is_some()
+                        && let Some(group) = flowlog_group
+                    {
+                        r = add_ct_state_new(r)?;
+                        r.add_expr(
+                            Log::new(Some(group), rule.log_prefix.clone())
+                                .context("log expression")?,
+                        );
                     }
                     let verdict = match rule.verdict {
                         Verdict::Return => VerdictKind::Return,
@@ -786,15 +787,14 @@ mod tests {
             if let Ok(out) = Command::new("nft")
                 .args(["list", "table", "inet", "suho"])
                 .output()
+                && out.status.success()
             {
-                if out.status.success() {
-                    let listing = String::from_utf8_lossy(&out.stdout);
-                    for needle in ["chain suho_egress", "chain suho_ingress", "@net_demo"] {
-                        assert!(
-                            listing.contains(needle),
-                            "programmed table missing {needle}:\n{listing}"
-                        );
-                    }
+                let listing = String::from_utf8_lossy(&out.stdout);
+                for needle in ["chain suho_egress", "chain suho_ingress", "@net_demo"] {
+                    assert!(
+                        listing.contains(needle),
+                        "programmed table missing {needle}:\n{listing}"
+                    );
                 }
             }
             println!("E2E-INNER-OK");

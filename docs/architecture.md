@@ -161,7 +161,7 @@ network daemon (precedent: Mullvad's VPN, a privileged nftables firewall in Rust
 - **Async runtime:** `tokio`.
 - **Docker:** `bollard` (events + inspect over the socket).
 - **nftables:** `rustables` (netlink; named sets; no `nft` binary in the image).
-- **Config / policy:** `serde` + `serde_yaml_ng` for inline label YAML and
+- **Config / policy:** `serde` + `serde-saphyr` for inline label YAML and
   `policies/suho.yaml`; `schemars` generates the JSON Schema (`suho schema`).
 - **Logging:** `tracing`.
 
