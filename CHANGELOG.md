@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.2](https://github.com/davidborzek/suho/compare/v0.3.1...v0.3.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate prometheus-client to 0.26 ([#37](https://github.com/davidborzek/suho/issues/37)) ([bf4b15b](https://github.com/davidborzek/suho/commit/bf4b15b9d972fae56142558a26d94de2b4f37cc7))
+
 ## [0.3.1](https://github.com/davidborzek/suho/compare/v0.3.0...v0.3.1) (2026-10-18)
 
 
